@@ -1,93 +1,134 @@
 import fitz
 import re
 import unicodedata
+import numpy as np
+from PIL import Image
 
-DIAS = ["lunes","martes","miercoles","jueves","viernes","sabado","domingo"]
+from paddleocr import PaddleOCR
 
-def normalizar(t):
-    t = t.lower()
-    t = unicodedata.normalize('NFKD', t).encode('ascii','ignore').decode()
-    t = t.replace("\n"," ")
-    t = re.sub(r"\s+", " ", t)
-    return t
+ocr = PaddleOCR(use_angle_cls=True, lang='es')
 
-def norm_hora(h):
-    h = h.replace(".", ":")
-    if ":" not in h:
-        return f"{int(h):02d}:00"
-    hh, mm = h.split(":")
-    mm = mm if mm else "00"
-    return f"{int(hh):02d}:{int(mm):02d}"
 
-def detectar_organismo(fragmento):
-    if "cfe" in fragmento:
-        return "CFE"
-    if "secundaria" in fragmento or "dges" in fragmento:
-        return "DGES"
-    if "utec" in fragmento:
-        return "UTEC"
-    return "OTRO"
+# -------------------------
+# NORMALIZACIÓN
+# -------------------------
+def normalizar(texto):
+    texto = texto.lower()
+    texto = unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode()
+    texto = texto.replace("\n", " ")
+    return texto
 
+
+# -------------------------
+# TEXTO DIRECTO
+# -------------------------
+def extraer_texto_directo(doc):
+    texto = ""
+    for page in doc:
+        texto += page.get_text()
+    return texto
+
+
+# -------------------------
+# OCR
+# -------------------------
+def extraer_texto_ocr(doc):
+    texto = ""
+
+    for page in doc:
+        pix = page.get_pixmap()
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+
+        result = ocr.ocr(np.array(img), cls=True)
+
+        for line in result:
+            for word in line:
+                texto += word[1][0] + " "
+
+    return texto
+
+
+# -------------------------
+# DECISIÓN INTELIGENTE
+# -------------------------
+def usar_ocr(texto):
+    if len(texto.strip()) < 100:
+        return True
+
+    # si tiene muy pocos números/palabras útiles
+    palabras = texto.split()
+    if len(palabras) < 30:
+        return True
+
+    return False
+
+
+# -------------------------
+# EXTRACCIÓN PRINCIPAL
+# -------------------------
 def extraer_datos_pdf(file):
     doc = fitz.open(stream=file.read(), filetype="pdf")
 
-    raw = ""
-    for p in doc:
-        raw += p.get_text()
+    texto_directo = extraer_texto_directo(doc)
 
-    txt = normalizar(raw)
+    if usar_ocr(texto_directo):
+        texto = extraer_texto_ocr(doc)
+        fuente = "OCR"
+    else:
+        texto = texto_directo
+        fuente = "PDF"
 
-    # --- CI
-    m = re.search(r"\b\d{7,8}\s*-?\s*\d\b", txt)
-    ci = m.group().replace(" ", "") if m else None
+    texto_norm = normalizar(texto)
 
-    # --- Nombre
+    # -------------------------
+    # CI
+    # -------------------------
+    ci_match = re.search(r"\d{7,8}-?\d", texto_norm)
+    ci = ci_match.group() if ci_match else None
+
+    # -------------------------
+    # NOMBRE
+    # -------------------------
     nombre = "No detectado"
-    pats = [
-        r"nombre\s*(del|de)?\s*(docente|titular)?\s*:\s*([a-z\s]+)",
+
+    patrones = [
+        r"nombre.*?:\s*([a-z\s]+)",
         r"docente\s*:\s*([a-z\s]+)"
     ]
-    for p in pats:
-        m = re.search(p, txt)
+
+    for p in patrones:
+        m = re.search(p, texto_norm)
         if m:
-            nombre = m.group(m.lastindex).strip().title()
+            nombre = m.group(1).strip().title()
             break
 
-    # --- HORARIOS (flexible)
-    # Ej: lunes 8 a 10 | lunes 08:00-10:30 | lunes de 8.30 a 11
-    dias = "|".join(DIAS)
-    patron = rf"({dias})\s*(de)?\s*(\d{{1,2}}[:.]?\d{{0,2}})\s*(a|-|–)\s*(\d{{1,2}}[:.]?\d{{0,2}})"
+    # -------------------------
+    # HORARIOS FLEXIBLES
+    # -------------------------
+    dias = "lunes|martes|miercoles|jueves|viernes|sabado"
+
+    patron = rf"({dias})\s*(de)?\s*(\d{{1,2}}[:.]?\d{{0,2}})\s*(a|-)\s*(\d{{1,2}}[:.]?\d{{0,2}})"
 
     horarios = []
-    for m in re.finditer(patron, txt):
-        dia = m.group(1)
-        h1 = norm_hora(m.group(3))
-        h2 = norm_hora(m.group(5))
 
-        # Tomamos una ventana de texto alrededor para inferir organismo
-        start = max(0, m.start()-80)
-        end = min(len(txt), m.end()+80)
-        frag = txt[start:end]
-        org = detectar_organismo(frag)
+    for match in re.findall(patron, texto_norm):
+
+        def fix(h):
+            h = h.replace(".", ":")
+            if ":" not in h:
+                return f"{h}:00"
+            return h
 
         horarios.append({
-            "dia": dia.capitalize(),
-            "inicio": h1,
-            "fin": h2,
-            "organismo": org
+            "dia": match[0],
+            "inicio": fix(match[2]),
+            "fin": fix(match[4])
         })
-
-    # --- Declaración (simple)
-    declara_otros = None
-    if re.search(r"no\s+declara.*otros", txt):
-        declara_otros = False
-    elif re.search(r"declara.*otros", txt):
-        declara_otros = True
 
     return {
         "ci": ci,
         "nombre": nombre,
         "horarios": horarios,
-        "declara_otros": declara_otros,
-        "texto": raw
+        "fuente": fuente,
+        "texto": texto
     }
