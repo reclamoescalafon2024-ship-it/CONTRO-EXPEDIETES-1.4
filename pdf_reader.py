@@ -1,17 +1,10 @@
 import fitz
+import pytesseract
+from PIL import Image
 import re
 import unicodedata
-import numpy as np
-from PIL import Image
-
-from paddleocr import PaddleOCR
-
-ocr = PaddleOCR(use_angle_cls=True, lang='es')
 
 
-# -------------------------
-# NORMALIZACIÓN
-# -------------------------
 def normalizar(texto):
     texto = texto.lower()
     texto = unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode()
@@ -19,60 +12,28 @@ def normalizar(texto):
     return texto
 
 
-# -------------------------
-# TEXTO DIRECTO
-# -------------------------
-def extraer_texto_directo(doc):
-    texto = ""
-    for page in doc:
-        texto += page.get_text()
-    return texto
-
-
-# -------------------------
-# OCR
-# -------------------------
-def extraer_texto_ocr(doc):
+def ocr_pdf(doc):
     texto = ""
 
     for page in doc:
         pix = page.get_pixmap()
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
 
-        result = ocr.ocr(np.array(img), cls=True)
-
-        for line in result:
-            for word in line:
-                texto += word[1][0] + " "
+        texto += pytesseract.image_to_string(img, lang="spa")
 
     return texto
 
 
-# -------------------------
-# DECISIÓN INTELIGENTE
-# -------------------------
-def usar_ocr(texto):
-    if len(texto.strip()) < 100:
-        return True
-
-    # si tiene muy pocos números/palabras útiles
-    palabras = texto.split()
-    if len(palabras) < 30:
-        return True
-
-    return False
-
-
-# -------------------------
-# EXTRACCIÓN PRINCIPAL
-# -------------------------
 def extraer_datos_pdf(file):
     doc = fitz.open(stream=file.read(), filetype="pdf")
 
-    texto_directo = extraer_texto_directo(doc)
+    texto_directo = ""
+    for page in doc:
+        texto_directo += page.get_text()
 
-    if usar_ocr(texto_directo):
-        texto = extraer_texto_ocr(doc)
+    # decidir si usar OCR
+    if len(texto_directo.strip()) < 100:
+        texto = ocr_pdf(doc)
         fuente = "OCR"
     else:
         texto = texto_directo
@@ -80,49 +41,32 @@ def extraer_datos_pdf(file):
 
     texto_norm = normalizar(texto)
 
-    # -------------------------
     # CI
-    # -------------------------
     ci_match = re.search(r"\d{7,8}-?\d", texto_norm)
     ci = ci_match.group() if ci_match else None
 
-    # -------------------------
-    # NOMBRE
-    # -------------------------
+    # Nombre
     nombre = "No detectado"
+    m = re.search(r"nombre.*?:\s*([a-z\s]+)", texto_norm)
+    if m:
+        nombre = m.group(1).strip().title()
 
-    patrones = [
-        r"nombre.*?:\s*([a-z\s]+)",
-        r"docente\s*:\s*([a-z\s]+)"
-    ]
-
-    for p in patrones:
-        m = re.search(p, texto_norm)
-        if m:
-            nombre = m.group(1).strip().title()
-            break
-
-    # -------------------------
-    # HORARIOS FLEXIBLES
-    # -------------------------
-    dias = "lunes|martes|miercoles|jueves|viernes|sabado"
-
-    patron = rf"({dias})\s*(de)?\s*(\d{{1,2}}[:.]?\d{{0,2}})\s*(a|-)\s*(\d{{1,2}}[:.]?\d{{0,2}})"
+    # Horarios
+    patron = r"(lunes|martes|miercoles|jueves|viernes|sabado)\s*(\d{1,2}[:.]?\d{0,2})\s*(a|-)\s*(\d{1,2}[:.]?\d{0,2})"
 
     horarios = []
 
     for match in re.findall(patron, texto_norm):
 
         def fix(h):
-            h = h.replace(".", ":")
             if ":" not in h:
                 return f"{h}:00"
-            return h
+            return h.replace(".", ":")
 
         horarios.append({
             "dia": match[0],
-            "inicio": fix(match[2]),
-            "fin": fix(match[4])
+            "inicio": fix(match[1]),
+            "fin": fix(match[3])
         })
 
     return {
