@@ -1,18 +1,20 @@
-def generar_informe(data):
+def validar_datos(data):
 
-    obs = "\n- ".join(data["observaciones"]) if data["observaciones"] else "Sin observaciones"
+    resultado = data.copy()
+    resultado["observaciones"] = []
 
-    return f"""
-INFORME TÉCNICO
+    # ✔ total horas
+    if data["total_horas"] > 50:
+        resultado["observaciones"].append("Supera el máximo de 50 horas")
 
-Docente: {data.get('nombre')}
-CI: {data.get('ci')}
+    # ✔ múltiples organismos
+    if len(data["horas"]) > 1:
+        resultado["multiempleo"] = True
+    else:
+        resultado["multiempleo"] = False
 
-Total de horas: {data.get('total_horas', 'N/D')}
+    # ✔ control de consistencia textual
+    if "no existe interferencia" not in data["texto"].lower():
+        resultado["observaciones"].append("No consta validación de contralor en expediente")
 
-Observaciones:
-- {obs}
-
-Conclusión:
-{"FAVORABLE" if not data["observaciones"] else "CON OBSERVACIONES"}
-"""
+    return resultado
