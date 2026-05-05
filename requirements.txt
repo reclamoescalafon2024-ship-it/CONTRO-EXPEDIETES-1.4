@@ -1,5 +1,5 @@
 streamlit
-pandas
-openpyxl
 pymupdf
-python-docx
+pillow
+paddleocr
+paddlepaddle
