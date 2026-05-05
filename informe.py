@@ -8,12 +8,11 @@ INFORME TÉCNICO
 Docente: {data.get('nombre')}
 CI: {data.get('ci')}
 
-Horas expediente: {data.get('horas_pdf')}
-Horas sistema: {data.get('horas_excel', 'N/D')}
+Total de horas: {data.get('total_horas', 'N/D')}
 
 Observaciones:
 - {obs}
 
 Conclusión:
-{"FAVORABLE" if not data["observaciones"] else "OBSERVADO"}
+{"FAVORABLE" if not data["observaciones"] else "CON OBSERVACIONES"}
 """
