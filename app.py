@@ -1,95 +1,103 @@
-import fitz
-import re
-import unicodedata
+import streamlit as st
 
-DIAS = ["lunes","martes","miercoles","jueves","viernes","sabado","domingo"]
+from pdf_reader import extraer_datos_pdf
+from validador import validar_datos
+from informe import generar_informe
 
-def normalizar(t):
-    t = t.lower()
-    t = unicodedata.normalize('NFKD', t).encode('ascii','ignore').decode()
-    t = t.replace("\n"," ")
-    t = re.sub(r"\s+", " ", t)
-    return t
+# ---------------------------------
+# CONFIGURACIÓN
+# ---------------------------------
+st.set_page_config(page_title="Contralor Digital PDF", layout="wide")
 
-def norm_hora(h):
-    h = h.replace(".", ":")
-    if ":" not in h:
-        return f"{int(h):02d}:00"
-    hh, mm = h.split(":")
-    mm = mm if mm else "00"
-    return f"{int(hh):02d}:{int(mm):02d}"
+st.title("📄 Contralor Digital de Expedientes")
+st.write("Análisis automático desde PDF (con soporte OCR)")
 
-def detectar_organismo(fragmento):
-    if "cfe" in fragmento:
-        return "CFE"
-    if "secundaria" in fragmento or "dges" in fragmento:
-        return "DGES"
-    if "utec" in fragmento:
-        return "UTEC"
-    return "OTRO"
+# ---------------------------------
+# SUBIDA DE ARCHIVO
+# ---------------------------------
+pdf = st.file_uploader("Subir expediente en PDF", type="pdf")
 
-def extraer_datos_pdf(file):
-    doc = fitz.open(stream=file.read(), filetype="pdf")
+# ---------------------------------
+# BOTÓN PRINCIPAL
+# ---------------------------------
+if st.button("Analizar expediente"):
 
-    raw = ""
-    for p in doc:
-        raw += p.get_text()
+    if not pdf:
+        st.error("Debe subir un expediente en PDF")
+        st.stop()
 
-    txt = normalizar(raw)
+    # ---------------------------------
+    # LECTURA DEL PDF
+    # ---------------------------------
+    with st.spinner("Procesando expediente..."):
+        data = extraer_datos_pdf(pdf)
 
-    # --- CI
-    m = re.search(r"\b\d{7,8}\s*-?\s*\d\b", txt)
-    ci = m.group().replace(" ", "") if m else None
+    # ---------------------------------
+    # DEBUG / CONTROL
+    # ---------------------------------
+    st.subheader("🔍 Fuente de datos")
+    st.write(data.get("fuente", "No especificado"))
 
-    # --- Nombre
-    nombre = "No detectado"
-    pats = [
-        r"nombre\s*(del|de)?\s*(docente|titular)?\s*:\s*([a-z\s]+)",
-        r"docente\s*:\s*([a-z\s]+)"
-    ]
-    for p in pats:
-        m = re.search(p, txt)
-        if m:
-            nombre = m.group(m.lastindex).strip().title()
-            break
+    st.subheader("🧾 Texto detectado (preview)")
+    st.text(data.get("texto", "")[:1500])
 
-    # --- HORARIOS (flexible)
-    # Ej: lunes 8 a 10 | lunes 08:00-10:30 | lunes de 8.30 a 11
-    dias = "|".join(DIAS)
-    patron = rf"({dias})\s*(de)?\s*(\d{{1,2}}[:.]?\d{{0,2}})\s*(a|-|–)\s*(\d{{1,2}}[:.]?\d{{0,2}})"
+    # ---------------------------------
+    # DATOS EXTRAÍDOS
+    # ---------------------------------
+    st.subheader("📌 Datos detectados")
+    st.write({
+        "CI": data.get("ci"),
+        "Nombre": data.get("nombre"),
+        "Horarios": data.get("horarios")
+    })
 
-    horarios = []
-    for m in re.finditer(patron, txt):
-        dia = m.group(1)
-        h1 = norm_hora(m.group(3))
-        h2 = norm_hora(m.group(5))
+    # ---------------------------------
+    # VALIDACIÓN
+    # ---------------------------------
+    resultado = validar_datos(data)
 
-        # Tomamos una ventana de texto alrededor para inferir organismo
-        start = max(0, m.start()-80)
-        end = min(len(txt), m.end()+80)
-        frag = txt[start:end]
-        org = detectar_organismo(frag)
+    st.subheader("⚖️ Resultado del control")
 
-        horarios.append({
-            "dia": dia.capitalize(),
-            "inicio": h1,
-            "fin": h2,
-            "organismo": org
-        })
+    col1, col2, col3 = st.columns(3)
 
-    # --- Declaración (simple)
-    declara_otros = None
-    if re.search(r"no\s+declara.*otros", txt):
-        declara_otros = False
-    elif re.search(r"declara.*otros", txt):
-        declara_otros = True
+    col1.metric("Total Horas", resultado.get("total_horas", 0))
+    col2.metric("Organismos", ", ".join(resultado.get("organismos", [])))
+    col3.metric("Multiempleo", "Sí" if resultado.get("multiempleo") else "No")
 
-    return {
-        "ci": ci,
-        "nombre": nombre,
-        "horarios": horarios,
-        "declara_otros": declara_otros,
-        st.write("Fuente de datos:", data["fuente"])
-st.text(data["texto"][:1000])
-        "texto": raw
-    }
+    # ---------------------------------
+    # SUPERPOSICIONES
+    # ---------------------------------
+    if resultado.get("conflictos"):
+        st.error("❌ Se detectaron superposiciones horarias")
+        st.write(resultado["conflictos"])
+    else:
+        st.success("✔ Sin superposición horaria")
+
+    # ---------------------------------
+    # OBSERVACIONES
+    # ---------------------------------
+    st.subheader("📝 Observaciones")
+
+    if resultado.get("observaciones"):
+        for o in resultado["observaciones"]:
+            st.warning(o)
+    else:
+        st.success("Sin observaciones")
+
+    # ---------------------------------
+    # INFORME
+    # ---------------------------------
+    informe = generar_informe(resultado)
+
+    st.subheader("📄 Informe técnico")
+    st.text(informe)
+
+    # ---------------------------------
+    # DESCARGA
+    # ---------------------------------
+    st.download_button(
+        label="⬇ Descargar informe",
+        data=informe,
+        file_name="informe_tecnico.txt",
+        mime="text/plain"
+    )
