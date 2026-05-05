@@ -1,41 +1,63 @@
-def validar_datos(data_pdf, df_horas, df_dsf):
+from datetime import datetime
+
+def parse_hora(h):
+    return datetime.strptime(h, "%H:%M")
+
+def hay_superposicion(horarios):
+
+    for i in range(len(horarios)):
+        for j in range(i+1, len(horarios)):
+
+            h1 = horarios[i]
+            h2 = horarios[j]
+
+            if h1["dia"] != h2["dia"]:
+                continue
+
+            inicio1 = parse_hora(h1["inicio"])
+            fin1 = parse_hora(h1["fin"])
+            inicio2 = parse_hora(h2["inicio"])
+            fin2 = parse_hora(h2["fin"])
+
+            if inicio1 < fin2 and inicio2 < fin1:
+                return True
+
+    return False
+
+
+def validar_datos(data):
 
     resultado = {
-        "ci": data_pdf.get("ci"),
-        "nombre": data_pdf.get("nombre"),
-        "horas_pdf": data_pdf.get("horas_pdf", 0),
+        "ci": data["ci"],
+        "nombre": data["nombre"],
         "observaciones": []
     }
 
-    if not resultado["ci"]:
-        resultado["observaciones"].append("No se pudo extraer CI")
+    horarios = data["horarios"]
+
+    # ✔ sin horarios
+    if not horarios:
+        resultado["observaciones"].append("No se detectaron horarios en el expediente")
         return resultado
 
-    ci = resultado["ci"].replace("-", "")
+    # ✔ superposición
+    if hay_superposicion(horarios):
+        resultado["observaciones"].append("Se detecta superposición horaria")
 
-    if "CI" not in df_horas.columns or "HORAS" not in df_horas.columns:
-        resultado["observaciones"].append("Excel horas mal formado")
-        return resultado
+    # ✔ total horas
+    total_horas = 0
+    for h in horarios:
+        inicio = parse_hora(h["inicio"])
+        fin = parse_hora(h["fin"])
+        total_horas += (fin - inicio).seconds / 3600
 
-    df_horas["CI"] = df_horas["CI"].astype(str).str.replace("-", "")
-    docente = df_horas[df_horas["CI"] == ci]
+    resultado["total_horas"] = total_horas
 
-    if docente.empty:
-        resultado["observaciones"].append("No aparece en Excel")
-        return resultado
+    if total_horas > 50:
+        resultado["observaciones"].append("Supera el máximo de horas permitido")
 
-    horas_excel = docente["HORAS"].sum()
-    resultado["horas_excel"] = horas_excel
-
-    if horas_excel != resultado["horas_pdf"]:
-        resultado["observaciones"].append("Diferencia PDF vs Excel")
-
-    if horas_excel > 50:
-        resultado["observaciones"].append("Supera 50 horas")
-
-    df_dsf["CI"] = df_dsf["CI"].astype(str).str.replace("-", "")
-
-    if ci not in df_dsf["CI"].values:
-        resultado["observaciones"].append("Sin DSF")
+    # ✔ declaración inconsistente
+    if not data["declara_otros"] and len(horarios) > 1:
+        resultado["observaciones"].append("Posible inconsistencia en declaración de vínculos")
 
     return resultado
