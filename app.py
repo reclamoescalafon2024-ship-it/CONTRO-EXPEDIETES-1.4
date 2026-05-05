@@ -89,5 +89,7 @@ def extraer_datos_pdf(file):
         "nombre": nombre,
         "horarios": horarios,
         "declara_otros": declara_otros,
+        st.write("Fuente de datos:", data["fuente"])
+st.text(data["texto"][:1000])
         "texto": raw
     }
