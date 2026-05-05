@@ -4,7 +4,6 @@ import unicodedata
 
 
 def normalizar(texto):
-    # Quita acentos y unifica formato
     texto = texto.lower()
     texto = unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode()
     texto = texto.replace("\n", " ")
@@ -20,74 +19,50 @@ def extraer_datos_pdf(file):
 
     texto = normalizar(texto_raw)
 
-    # -----------------------------
-    # CI (más flexible)
-    # -----------------------------
-    ci_match = re.search(r"\b\d{7,8}\s*-?\s*\d\b", texto)
-    ci = ci_match.group().replace(" ", "") if ci_match else None
+    # -------------------------
+    # CI
+    # -------------------------
+    ci_match = re.search(r"\d{7,8}-?\d", texto)
+    ci = ci_match.group() if ci_match else None
 
-    # -----------------------------
-    # NOMBRE (varias formas)
-    # -----------------------------
+    # -------------------------
+    # NOMBRE
+    # -------------------------
     nombre = "No detectado"
 
-    patrones_nombre = [
-        r"nombre\s*(del|de)?\s*(docente|titular)?\s*:\s*([a-z\s]+)",
-        r"docente\s*:\s*([a-z\s]+)",
-    ]
-
-    for p in patrones_nombre:
-        m = re.search(p, texto)
+    m = re.search(r"nombre titular:\s*([a-z\s]+)", texto)
+    if m:
+        nombre = m.group(1).strip().title()
+    else:
+        m = re.search(r"docente\s+([a-z\s]+)", texto)
         if m:
-            nombre = m.group(m.lastindex).strip().title()
-            break
+            nombre = m.group(1).strip().title()
 
-    # -----------------------------
-    # HORARIOS (MUY flexible)
-    # -----------------------------
-    dias = "lunes|martes|miercoles|jueves|viernes|sabado"
+    # -------------------------
+    # HORAS POR ORGANISMO
+    # -------------------------
+    horas = {}
 
-    patron_horario = rf"({dias})\s*(de)?\s*(\d{{1,2}}[:.]?\d{{0,2}})\s*(a|-)\s*(\d{{1,2}}[:.]?\d{{0,2}})"
+    patron = r"(cfe|direccion general de educacion secundaria).*?(\d{1,2})\s*hs"
 
-    horarios = []
+    for match in re.findall(patron, texto):
+        org = match[0]
+        h = int(match[1])
 
-    for match in re.findall(patron_horario, texto):
-        dia = match[0]
+        if "cfe" in org:
+            horas["CFE"] = horas.get("CFE", 0) + h
+        elif "secundaria" in org:
+            horas["DGES"] = horas.get("DGES", 0) + h
 
-        def limpiar_hora(h):
-            if ":" not in h:
-                return f"{h}:00"
-            return h.replace(".", ":")
+    # -------------------------
+    # TOTAL
+    # -------------------------
+    total = sum(horas.values())
 
-        inicio = limpiar_hora(match[2])
-        fin = limpiar_hora(match[4])
-
-        horarios.append({
-            "dia": dia.capitalize(),
-            "inicio": inicio,
-            "fin": fin
-        })
-
-    # -----------------------------
-    # DECLARACIÓN (inteligente)
-    # -----------------------------
-    declara_otros = None
-
-    if re.search(r"no\s+declara.*otros", texto):
-        declara_otros = False
-
-    elif re.search(r"declara.*otros", texto):
-        declara_otros = True
-
-    # fallback más amplio
-    elif "otros vinculos" in texto:
-        declara_otros = True
-
-    # -----------------------------
     return {
         "ci": ci,
         "nombre": nombre,
-        "horarios": horarios,
-        "declara_otros": declara_otros,
-        "texto": texto_raw  # dejamos original por si querés debug
+        "horas": horas,
+        "total_horas": total,
+        "texto": texto_raw
     }
